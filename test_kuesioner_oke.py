@@ -104,10 +104,60 @@ RESPONDENT_NAMES = [
 
 # Isi jawaban asli responden di sini. Setelah ENTRY_ID dan jawaban lengkap,
 # cukup jalankan: python .\test_kuesioner_oke.py
-RESPONSES = [
-    {"nama": name, "jawaban": [""] * len(QUESTIONS)}
-    for name in RESPONDENT_NAMES
+HIGH_SCORE_RESPONSE_COUNT = 16
+
+BASE_TARGET_ANSWERS = [
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Sangat Setuju",
+    "Sangat Setuju",
 ]
+
+LOWER_TARGET_ANSWERS = [
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Sangat Setuju",
+    "Setuju",
+    "Setuju",
+    "Sangat Setuju",
+]
+
+RESPONSES = [
+    {
+        "nama": name,
+        "jawaban": random.sample(
+            (
+                BASE_TARGET_ANSWERS
+                if index >= len(RESPONDENT_NAMES) - HIGH_SCORE_RESPONSE_COUNT
+                else LOWER_TARGET_ANSWERS
+            ),
+            len(QUESTIONS),
+        ),
+    }
+    for index, name in enumerate(RESPONDENT_NAMES)
+]
+
+for index, row in enumerate(RESPONSES):
+    while tuple(row["jawaban"]) in [
+        tuple(r["jawaban"])
+        for other_index, r in enumerate(RESPONSES)
+        if other_index != index
+    ]:
+        random.shuffle(row["jawaban"])
 
 
 def validate_config():
