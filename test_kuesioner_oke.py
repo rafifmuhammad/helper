@@ -1,5 +1,11 @@
+import json
+import os
 import random
+import shutil
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import requests
 
@@ -7,9 +13,11 @@ import requests
 FORM_URL = "https://docs.google.com/forms/u/0/d/e/1FAIpQLSdWXXM960smoclQ3ihypxds1qOCZhVzPQOzr36v1PG_9f69Og/formResponse"
 
 MIN_DELAY_SECONDS = 30
-MAX_DELAY_SECONDS = 7200
+MAX_DELAY_SECONDS = 2400
 MIN_TARGET_PERCENTAGE = 92.0
 MAX_TARGET_PERCENTAGE = 93.0
+STOP_WHEN_NAME_REPEATS = "Yarmadi"
+STATE_FILE = Path(__file__).resolve().with_name("test_kuesioner_oke_state.json")
 
 ENTRY_ID = {
     "nama": "entry.1360621666",
@@ -248,17 +256,106 @@ def build_payload(row):
     return payload
 
 
+def normalize_name(name):
+    return " ".join(str(name).split()).casefold()
+
+
+def stop_pm2_process():
+    pm2_id = os.environ.get("pm_id") or os.environ.get("PM2_ID")
+    if not pm2_id:
+        return
+
+    pm2_command = shutil.which("pm2") or shutil.which("pm2.cmd")
+    if not pm2_command:
+        print("PM2 terdeteksi, tapi command pm2 tidak ditemukan di PATH.")
+        return
+
+    print(f"Meminta PM2 menghentikan proses ini (pm_id={pm2_id}).")
+    try:
+        subprocess.run(
+            [pm2_command, "stop", pm2_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"Gagal meminta PM2 stop: {error}")
+
+
+def exit_now(message):
+    print(message, flush=True)
+    stop_pm2_process()
+    sys.exit(0)
+
+
+def load_submitted_names():
+    if not STATE_FILE.exists():
+        return []
+
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        exit_now(f"State tidak bisa dibaca: {error}. Proses dihentikan.")
+
+    submitted_names = data.get("submitted_names", [])
+    if not isinstance(submitted_names, list):
+        exit_now("Format state tidak valid. Proses dihentikan.")
+
+    return submitted_names
+
+
+def save_submitted_names(submitted_names):
+    state = {"submitted_names": submitted_names}
+    temp_file = STATE_FILE.with_suffix(".tmp")
+    temp_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    temp_file.replace(STATE_FILE)
+
+
+def has_submitted_name(submitted_names, name):
+    target_name = normalize_name(name)
+    return any(normalize_name(submitted_name) == target_name for submitted_name in submitted_names)
+
+
+def response_name_exists(name):
+    target_name = normalize_name(name)
+    return any(normalize_name(row["nama"]) == target_name for row in RESPONSES)
+
+
+def exit_if_stop_name_repeats(submitted_names):
+    if has_submitted_name(submitted_names, STOP_WHEN_NAME_REPEATS) and response_name_exists(
+        STOP_WHEN_NAME_REPEATS
+    ):
+        exit_now(
+            f"{STOP_WHEN_NAME_REPEATS} sudah pernah dikirim. "
+            "Proses dihentikan agar tidak mengirim ulang."
+        )
+
+
+def remember_submitted_name(submitted_names, name):
+    if not has_submitted_name(submitted_names, name):
+        submitted_names.append(name)
+        save_submitted_names(submitted_names)
+
+
 def submit_all():
+    submitted_names = load_submitted_names()
+    exit_if_stop_name_repeats(submitted_names)
+
     validate_config()
     validate_responses()
     validate_unique_answer_patterns()
     validate_target_percentage_range()
 
     for index, row in enumerate(RESPONSES, start=1):
+        if normalize_name(row["nama"]) == normalize_name(STOP_WHEN_NAME_REPEATS):
+            exit_if_stop_name_repeats(submitted_names)
+
         response = requests.post(FORM_URL, data=build_payload(row), timeout=30)
 
         if response.status_code == 200:
             print(f"{index}. {row['nama']} berhasil dikirim.")
+            remember_submitted_name(submitted_names, row["nama"])
         else:
             print(f"{index}. {row['nama']} gagal. Status code: {response.status_code}")
             print(response.text[:300])
